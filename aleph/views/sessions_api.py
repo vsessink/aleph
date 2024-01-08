@@ -9,7 +9,7 @@ from aleph.settings import SETTINGS
 from aleph.core import db, url_for, cache
 from aleph.authz import Authz
 from aleph.oauth import oauth, handle_oauth, OAuthError
-from aleph.model import Role, PasswordCredentialsError
+from aleph.model import Role, PasswordCredentialsError, RoleBlockedError
 from aleph.logic.util import ui_url
 from aleph.logic.roles import update_role
 from aleph.views.util import get_url_path, parse_request
@@ -59,7 +59,19 @@ def password_login():
     try:
         role = Role.login(data.get("email"), data.get("password"))
     except PasswordCredentialsError:
+        # Raising a 400 error in this and the following case is technically
+        # not 100% correct. This seems to have been introduced in order to simplify
+        # error handling in the frontend. Raising a 401 error triggers a
+        # hard page reload and state invalidation etc.
         raise BadRequest(gettext("Invalid user or password."))
+    except RoleBlockedError:
+        return jsonify(
+            {
+                "status": "error",
+                "message": "Your account has been blocked.",
+            },
+            status=403,
+        )
 
     role.touch()
     db.session.commit()
@@ -113,6 +125,9 @@ def oauth_callback():
         role = handle_oauth(oauth.provider, oauth_token)
     except OAuthError:
         raise err
+    except RoleBlockedError:
+        error_url = ui_url("oauth", status="error", code=403)
+        return redirect(error_url)
 
     db.session.commit()
     update_role(role)
